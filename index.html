@@ -12,14 +12,12 @@
             font-family: 'Inter', sans-serif;
             overscroll-behavior-y: contain;
         }
-        /* Prevents the user from selecting the image while swiping */
         .photo-item {
             user-select: none;
             -webkit-user-select: none;
             -moz-user-select: none;
             -ms-user-select: none;
         }
-        /* Simple transition for the swipe effect */
         .photo-container {
             transition: transform 0.3s ease-out;
         }
@@ -44,7 +42,7 @@
                     <li>Go to "APIs & Services" > "Credentials".</li>
                     <li>Click "Create Credentials" > "OAuth client ID".</li>
                     <li>Select "Web application" as the type.</li>
-                    <li>Under "Authorized JavaScript origins", add the URL where you're hosting this app.</li>
+                    <li>Under "Authorized JavaScript origins", add the URL where you're hosting this app (e.g., your GitHub Pages URL).</li>
                     <li>Copy the generated "Client ID" and paste it into the code.</li>
                 </ol>
             </div>
@@ -88,16 +86,18 @@
 
         async function initializeGapiClient() {
             if (!CLIENT_ID || CLIENT_ID === 'YOUR_CLIENT_ID_HERE') {
-                alert('Please enter your Google Client ID in the script section of this file.');
+                const messageBox = document.createElement('div');
+                messageBox.className = 'fixed top-5 left-1/2 -translate-x-1/2 bg-red-500 text-white p-4 rounded-lg shadow-lg';
+                messageBox.innerText = 'Please enter your Google Client ID in the script section of this file.';
+                document.body.appendChild(messageBox);
+                setTimeout(() => messageBox.remove(), 5000);
                 return;
             }
             await gapi.client.init({
-                apiKey: null, // API Key is not needed for Photos Library API with OAuth
-                clientId: CLIENT_ID,
+                // apiKey is not needed for Photos Library API with OAuth
                 discoveryDocs: ['https://photoslibrary.googleapis.com/$discovery/rest?version=v1'],
             });
             gapiClient = gapi.client;
-            checkToken();
         }
 
         function gisLoaded() {
@@ -105,7 +105,12 @@
                 client_id: CLIENT_ID,
                 scope: SCOPES,
                 callback: (tokenResponse) => {
-                    // This callback is triggered after user grants consent
+                    // This callback is triggered after user grants consent or if a valid token is found.
+                    if (tokenResponse && tokenResponse.error) {
+                        console.error("Token Error:", tokenResponse.error);
+                        return;
+                    }
+                    console.log("Received token response:", tokenResponse);
                     if (tokenResponse && tokenResponse.access_token) {
                         gapi.client.setToken(tokenResponse);
                         updateUI(true);
@@ -114,29 +119,24 @@
                 },
             });
         }
-        
-        function checkToken() {
-             // Check if the user has a valid token without prompting for login
-            const token = gapi.client.getToken();
-            if (token) {
-                updateUI(true);
-                loadPhotos();
-            } else {
-                updateUI(false);
-            }
-        }
 
         // --- Authentication ---
 
         function handleSignIn() {
-            tokenClient.requestAccessToken({prompt: 'consent'});
+            // Request a new token. 'prompt: consent' will force the consent screen to appear,
+            // which is crucial for ensuring the user grants the correct scopes.
+            tokenClient.requestAccessToken({ prompt: 'consent' });
         }
 
         function handleSignOut() {
             const token = gapi.client.getToken();
-            if (token) {
+            if (token !== null) {
+                // Revoke the token to remove the app's access.
                 google.accounts.oauth2.revoke(token.access_token, () => {
+                    console.log('Access token revoked.');
+                    // Clear the local gapi client token
                     gapi.client.setToken('');
+                    // Reset app state
                     photos = [];
                     currentIndex = 0;
                     photoContainer.innerHTML = '';
@@ -154,6 +154,8 @@
             } else {
                 loginView.classList.remove('hidden');
                 photoView.classList.add('hidden');
+                loadingIndicator.classList.remove('hidden');
+                loadingIndicator.innerText = 'Loading photos...';
             }
         }
 
@@ -175,13 +177,12 @@
                     });
 
                     if (response.result.mediaItems) {
-                        // Filter for photos only, excluding videos
                         const photoItems = response.result.mediaItems.filter(item => item.mimeType.startsWith('image/'));
                         allPhotos.push(...photoItems);
                     }
                     
                     nextPageToken = response.result.nextPageToken;
-                    if (!nextPageToken) break; // Stop if no more pages
+                    if (!nextPageToken) break;
                 }
 
                 photos = shuffleArray(allPhotos);
@@ -194,9 +195,10 @@
 
             } catch (err) {
                 console.error("Error loading photos: ", err);
-                loadingIndicator.innerText = 'Failed to load photos. Please try again.';
-                // If token is expired, sign out to force re-login
-                if (err.result && err.result.error && err.result.error.code === 16) {
+                const errorBody = JSON.parse(err.body);
+                loadingIndicator.innerText = `Failed to load photos. Error: ${errorBody.error.message}`;
+                // If token is expired or permission is denied, sign out to force re-login
+                if (err.result && err.result.error && (err.result.error.code === 16 || err.result.error.code === 403)) {
                     handleSignOut();
                 }
             }
@@ -214,7 +216,6 @@
             if (index < 0 || index >= photos.length) return;
             
             const photo = photos[index];
-            // Request a URL optimized for the screen size
             const imageUrl = `${photo.baseUrl}=w${window.innerWidth}-h${window.innerHeight}`;
             
             photoContainer.innerHTML = `
@@ -232,7 +233,6 @@
             const deltaX = touchendX - touchstartX;
             const deltaY = touchendY - touchstartY;
 
-            // We only care about horizontal swipes
             if (Math.abs(deltaX) > Math.abs(deltaY)) {
                 if (deltaX < -50) { // Swiped left
                     currentIndex = (currentIndex + 1) % photos.length;
